@@ -124,6 +124,9 @@
       community.docker.docker_container:
         name: "{{ audit_svc_container }}"
         image: "{{ audit_svc_image }}:{{ audit_svc_tag }}"
+        # сравнивать ID образа, а не имя тега: воспроизводимый образ нового релиза
+        # не пересоздаёт контейнер (в community.docker 4.x значение по умолчанию — recreate)
+        image_name_mismatch: ignore
         state: started
         restart_policy: unless-stopped
         # каталог, а не файл: template подменяет файл новым inode
@@ -146,6 +149,57 @@
       retries: 10
       delay: 3
 
+    # ---------- Nginx: единственный опубликованный вход ----------
+    - name: Nginx config directory
+      ansible.builtin.file:
+        path: "{{ nginx_config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Nginx config from template
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: "{{ nginx_config_dir }}/default.conf"
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Nginx container
+      community.docker.docker_container:
+        name: "{{ nginx_container }}"
+        image: "{{ nginx_image }}"
+        state: started
+        restart_policy: unless-stopped
+        # каталог, а не файл — по той же причине, что и у конфига сервиса
+        volumes:
+          - "{{ nginx_config_dir }}:/etc/nginx/conf.d:ro"
+        published_ports:
+          - "{{ nginx_published_port }}"
+        networks:
+          - name: "{{ audit_network }}"
+        networks_cli_compatible: true
+
+    - name: nginx-exporter container
+      community.docker.docker_container:
+        name: "{{ nginx_exporter_container }}"
+        image: "{{ nginx_exporter_image }}"
+        state: started
+        restart_policy: unless-stopped
+        command:
+          - "--nginx.scrape-uri=http://{{ nginx_container }}:8081/stub_status"
+        published_ports:
+          - "{{ nginx_exporter_published_port }}"
+        networks:
+          - name: "{{ audit_network }}"
+        networks_cli_compatible: true
+
+    - name: audit-svc is reachable through Nginx
+      ansible.builtin.uri:
+        url: "http://localhost:8088/healthz"
+      register: __health_nginx
+      until: __health_nginx.status == 200
+      retries: 10
+      delay: 3
+
   handlers:
     # аналог опции command у Vault Agent: новый конфиг подхватывается без перезапуска
     - name: Reload audit-svc config
@@ -159,3 +213,9 @@
       ansible.builtin.debug:
         msg: "{{ __reload.json }}"
       listen: Reload audit-svc config
+
+    # проверить конфиг и перечитать его без перезапуска контейнера
+    - name: Reload nginx
+      community.docker.docker_container_exec:
+        container: "{{ nginx_container }}"
+        command: sh -c "nginx -t && nginx -s reload"

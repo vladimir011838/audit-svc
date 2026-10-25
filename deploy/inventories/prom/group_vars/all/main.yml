@@ -20,3 +20,14 @@ audit_svc_migrate_container: audit-svc-migrate
 # каталог с конфигом: монтируется в контейнер целиком (не файл!)
 audit_svc_config_dir: /data/audit-svc/config
 audit_svc_group: audit-svc   # GID 10001 — как у пользователя app в образе
+
+# Nginx: единственная точка входа, публикуется только на localhost сервера
+nginx_container: audit-nginx
+nginx_image: nginx:1.27-alpine
+nginx_config_dir: /data/audit-svc/nginx
+nginx_published_port: "127.0.0.1:8088:8080"
+
+# nginx-exporter: читает stub_status по docker-сети
+nginx_exporter_container: audit-nginx-exporter
+nginx_exporter_image: nginx/nginx-prometheus-exporter:1.4
+nginx_exporter_published_port: "127.0.0.1:9113:9113"
