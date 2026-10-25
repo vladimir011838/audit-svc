@@ -1,6 +1,9 @@
 - name: Deploy audit-svc
   hosts: all
   gather_facts: false
+  # уведомлённые хендлеры выполняются даже при ошибке в задаче:
+  # сервис не останется со старым паролем, если в базе уже новый
+  force_handlers: true
   pre_tasks:
     - name: Image tag of the release is set
       ansible.builtin.assert:
@@ -140,6 +143,11 @@
     - name: Address of audit-svc in the docker network
       ansible.builtin.set_fact:
         __audit_svc_host: "{{ __audit_svc.container.NetworkSettings.Networks[audit_network].IPAddress }}"
+
+    # хендлер перечитывания конфига — сразу, до проверки здоровья:
+    # после смены пароля сервис должен переподключиться с новым
+    - name: Apply config reload before health check
+      ansible.builtin.meta: flush_handlers
 
     - name: audit-svc is healthy
       ansible.builtin.uri:
