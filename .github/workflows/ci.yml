@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/audit-svc
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: python -m pip install 'poetry>=2,<3'
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run tests
+        run: poetry run pytest --junitxml=reports/junit.xml
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: reports/junit.xml
+
+  build:
+    name: Build and publish image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write          
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       
+
+      - name: Image tag and SOURCE_DATE_EPOCH
+        id: meta
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="main_${GITHUB_SHA::7}"
+          fi
+          EPOCH=$(git log -1 --format=%ct -- src pyproject.toml poetry.lock README.md Dockerfile .dockerignore)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "epoch=$EPOCH" >> "$GITHUB_OUTPUT"
+          echo "image tag: $TAG, SOURCE_DATE_EPOCH: $EPOCH"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.meta.outputs.epoch }}
+        with:
+          context: .
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          build-args: SOURCE_DATE_EPOCH=${{ steps.meta.outputs.epoch }}
+
+          provenance: false
+          sbom: false
+
+          outputs: type=image,push=true,rewrite-timestamp=true
+
+      - name: Image digest
+        run: |
+          echo "image:  $IMAGE:${{ steps.meta.outputs.tag }}"
+          echo "digest: ${{ steps.build.outputs.digest }}"
+          echo "imageid: ${{ steps.build.outputs.imageid }}"

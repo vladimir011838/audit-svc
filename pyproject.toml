@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "audit-svc"
+version = "0.1.0"
+description = "Приём событий аудита по HTTP и запись их в PostgreSQL"
+authors = []
+readme = "README.md"
+packages = [{ include = "audit_svc", from = "src" }]
+
+[tool.poetry.scripts]
+server = "audit_svc.main:main"
+migrate = "audit_svc.migrate:main"
+generate = "audit_svc.generate:main"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+aiohttp = "^3.9.5"
+asyncpg = "^0.30.0"
+prometheus-client = "^0.21.0"
+pyyaml = "^6.0.2"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
+pytest-aiohttp = "^1.0.5"
+pytest-asyncio = "^0.24.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+log_cli = true
+log_cli_level = "INFO"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
