@@ -1,0 +1,5 @@
+all:
+  hosts:
+    prom1:
+      # раннер работает на целевой машине: подключение локальное, без SSH
+      ansible_connection: local

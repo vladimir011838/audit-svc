@@ -93,3 +93,39 @@ jobs:
           echo "image:  $IMAGE:${{ steps.meta.outputs.tag }}"
           echo "digest: ${{ steps.build.outputs.digest }}"
           echo "imageid: ${{ steps.build.outputs.imageid }}"
+
+  deploy:
+    name: Deploy
+    needs: build
+    # только на защищённом теге vX.Y.Z, после публикации образа
+    if: github.ref_type == 'tag'
+    runs-on: [self-hosted, deploy]
+    environment:
+      name: production            # секрет ANSIBLE_VAULT_PASSWORD доступен только тегам v*
+      url: http://localhost:8088
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # закреплённые версии из requirements.yml — в deploy/collections
+      - name: Install pinned Ansible collections
+        working-directory: deploy
+        run: ansible-galaxy collection install -r requirements.yml -p collections
+
+      - name: Deploy with Ansible
+        working-directory: deploy
+        env:
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+          ANSIBLE_FORCE_COLOR: "1"
+        run: >-
+          ansible-playbook audit-svc.play.yml
+          --vault-password-file vault-pass.sh
+          -e audit_svc_tag=${{ github.ref_name }}

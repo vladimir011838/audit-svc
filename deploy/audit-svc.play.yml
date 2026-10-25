@@ -1,0 +1,161 @@
+- name: Deploy audit-svc
+  hosts: all
+  gather_facts: false
+  pre_tasks:
+    - name: Image tag of the release is set
+      ansible.builtin.assert:
+        that: audit_svc_tag is defined and audit_svc_tag | length > 0
+        fail_msg: "Передайте тег образа: -e audit_svc_tag=vX.Y.Z"
+
+  tasks:
+    # ---------- сеть и том ----------
+    - name: Docker network for audit-svc
+      community.docker.docker_network:
+        name: "{{ audit_network }}"
+        state: present
+
+    - name: Volume for PostgreSQL data
+      community.docker.docker_volume:
+        name: "{{ postgres_volume }}"
+        state: present
+
+    # ---------- PostgreSQL: без опубликованных портов ----------
+    - name: PostgreSQL container
+      community.docker.docker_container:
+        name: "{{ postgres_container }}"
+        image: "{{ postgres_image }}"
+        state: started
+        restart_policy: unless-stopped
+        env:
+          POSTGRES_PASSWORD: "{{ postgres_superuser_password }}"
+        volumes:
+          - "{{ postgres_volume }}:/var/lib/postgresql/data"
+        networks:
+          - name: "{{ audit_network }}"
+        networks_cli_compatible: true
+      register: __postgres
+      no_log: true   # в параметрах пароль суперпользователя
+
+    # Ansible работает на этой же машине и подключается к контейнерам
+    # по IP в docker-сети — публиковать порты не нужно
+    - name: Address of PostgreSQL in the docker network
+      ansible.builtin.set_fact:
+        __postgres_host: "{{ __postgres.container.NetworkSettings.Networks[audit_network].IPAddress }}"
+
+    - name: Wait for PostgreSQL to accept connections
+      community.postgresql.postgresql_ping:
+        login_host: "{{ __postgres_host }}"
+        login_user: postgres
+        login_password: "{{ postgres_superuser_password }}"
+        login_db: postgres
+      register: __ping
+      until: __ping.is_available
+      retries: 20
+      delay: 3
+
+    # ---------- пользователь и база: владелец audit_svc ----------
+    - name: Database user audit_svc
+      community.postgresql.postgresql_user:
+        name: "{{ audit_db_user }}"
+        password: "{{ audit_db_password }}"
+        login_host: "{{ __postgres_host }}"
+        login_user: postgres
+        login_password: "{{ postgres_superuser_password }}"
+        login_db: postgres
+      no_log: true   # пароль пользователя
+
+    - name: Database audit owned by audit_svc
+      community.postgresql.postgresql_db:
+        name: "{{ audit_db_name }}"
+        owner: "{{ audit_db_user }}"
+        login_host: "{{ __postgres_host }}"
+        login_user: postgres
+        login_password: "{{ postgres_superuser_password }}"
+
+    # ---------- конфиг сервиса из шаблона ----------
+    - name: Config directory
+      ansible.builtin.file:
+        path: "{{ audit_svc_config_dir }}"
+        state: directory
+        group: "{{ audit_svc_group }}"
+        mode: "0750"
+
+    - name: Service config from template
+      ansible.builtin.template:
+        src: config.yaml.j2
+        dest: "{{ audit_svc_config_dir }}/config.yaml"
+        group: "{{ audit_svc_group }}"
+        mode: "0640"   # не шире 0640: читает только группа audit-svc (GID 10001 = app в образе)
+      no_log: true     # в шаблоне пароль БД
+      notify: Reload audit-svc config
+
+    # ---------- образ релиза ----------
+    - name: Pull image of the release
+      community.docker.docker_image:
+        name: "{{ audit_svc_image }}:{{ audit_svc_tag }}"
+        source: pull
+
+    # ---------- ★ миграции: до обновления сервиса ----------
+    - name: Database migrations
+      community.docker.docker_container:
+        name: "{{ audit_svc_migrate_container }}"
+        image: "{{ audit_svc_image }}:{{ audit_svc_tag }}"
+        command: migrate
+        detach: false          # ждать завершения и получить вывод
+        cleanup: true          # удалить контейнер после выполнения
+        state: started
+        volumes:
+          - "{{ audit_svc_config_dir }}:/etc/audit-svc:ro"
+        networks:
+          - name: "{{ audit_network }}"
+        networks_cli_compatible: true
+      register: __migrate
+      # упали миграции — плейбук останавливается, новый образ не запускается
+      failed_when: __migrate.status | default(1) != 0
+      # изменения только если применена хотя бы одна миграция
+      changed_when: "'applying' in (__migrate.container.Output | default(''))"
+
+    - name: Migration log
+      ansible.builtin.debug:
+        msg: "{{ (__migrate.container.Output | default('')).splitlines() }}"
+
+    # ---------- сервис: без опубликованных портов ----------
+    - name: audit-svc container
+      community.docker.docker_container:
+        name: "{{ audit_svc_container }}"
+        image: "{{ audit_svc_image }}:{{ audit_svc_tag }}"
+        state: started
+        restart_policy: unless-stopped
+        # каталог, а не файл: template подменяет файл новым inode
+        volumes:
+          - "{{ audit_svc_config_dir }}:/etc/audit-svc:ro"
+        networks:
+          - name: "{{ audit_network }}"
+        networks_cli_compatible: true
+      register: __audit_svc
+
+    - name: Address of audit-svc in the docker network
+      ansible.builtin.set_fact:
+        __audit_svc_host: "{{ __audit_svc.container.NetworkSettings.Networks[audit_network].IPAddress }}"
+
+    - name: audit-svc is healthy
+      ansible.builtin.uri:
+        url: "http://{{ __audit_svc_host }}:8080/healthz"
+      register: __health
+      until: __health.status == 200
+      retries: 10
+      delay: 3
+
+  handlers:
+    # аналог опции command у Vault Agent: новый конфиг подхватывается без перезапуска
+    - name: Reload audit-svc config
+      ansible.builtin.uri:
+        url: "http://{{ __audit_svc_host }}:8080/reload"
+        method: POST
+        return_content: true
+      register: __reload
+
+    - name: Reload result
+      ansible.builtin.debug:
+        msg: "{{ __reload.json }}"
+      listen: Reload audit-svc config

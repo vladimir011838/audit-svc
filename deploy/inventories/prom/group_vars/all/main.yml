@@ -1,0 +1,22 @@
+# docker-сеть развёртывания: сервис, PostgreSQL, Nginx — без опубликованных портов
+audit_network: audit-net
+
+# PostgreSQL
+postgres_container: audit-postgres
+postgres_image: postgres:17
+postgres_volume: audit-pgdata
+postgres_superuser_password: "{{ vault_postgres_superuser_password }}"
+
+# база и пользователь сервиса
+audit_db_name: audit
+audit_db_user: audit_svc
+audit_db_password: "{{ vault_audit_db_password }}"
+
+# сервис
+audit_svc_image: ghcr.io/vladimir011838/audit-svc
+# тег образа передаёт CI: -e audit_svc_tag=<тег релиза>
+audit_svc_container: audit-svc
+audit_svc_migrate_container: audit-svc-migrate
+# каталог с конфигом: монтируется в контейнер целиком (не файл!)
+audit_svc_config_dir: /data/audit-svc/config
+audit_svc_group: audit-svc   # GID 10001 — как у пользователя app в образе

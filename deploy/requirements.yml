@@ -1,0 +1,8 @@
+---
+# версии закреплены: другая версия модуля может иначе сравнивать параметры
+# контейнера и пересоздать его при релизе
+collections:
+  - name: community.docker
+    version: "3.13.3"
+  - name: community.postgresql
+    version: "3.9.0"

@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+database:
+  host: {{ postgres_container }}
+  port: 5432
+  name: {{ audit_db_name }}
+  user: {{ audit_db_user }}
+  password: "{{ audit_db_password }}"
