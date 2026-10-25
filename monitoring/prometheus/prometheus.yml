@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # метрики сервиса — через Nginx: напрямую до сервиса не достучаться, так задумано
+  - job_name: audit-svc
+    metrics_path: /metrics
+    static_configs:
+      - targets: [audit-nginx:8080]
+
+  # метрики Nginx от nginx-exporter (читает stub_status)
+  - job_name: nginx
+    static_configs:
+      - targets: [audit-nginx-exporter:9113]
